@@ -130,6 +130,9 @@ jobs:
         with:
           name: ci-analysis
 
+      - name: Install dependencies
+        run: pip install google-genai==2.20.0
+
       # Tool 5 — GitHub MCP: apply file patch + create fix PR
       - name: "Step 2 — AI Agent: fix (read_analysis → apply_patch → create_pull_request)"
         env:
