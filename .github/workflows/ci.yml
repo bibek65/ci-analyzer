@@ -3,6 +3,7 @@ name: CI + AI Failure Analyzer
 on:
   push:
     branches: [main, dev]
+  workflow_dispatch:
 
 jobs:
   # ─── Job 1: Build ────────────────────────────────────────────────────────────
