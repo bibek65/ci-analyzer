@@ -67,13 +67,15 @@ jobs:
       #   Tool 1 — GitHub API  : CI logs already downloaded above
       #   Tool 2 — RAG / KB    : keyword-scored knowledge base search in script
       #   Tool 3 — Gemini      : root cause analysis + PR description in one call
-      - name: "Step 1 — AI Log Analysis (RAG + Gemini)"
+      - name: "Step 1 — AI Agent: analyze (read_ci_logs → search_knowledge_base → write_analysis)"
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           RUN_ID: ${{ github.run_id }}
+          TRIGGER_BRANCH: ${{ github.ref_name }}
+          AGENT_MODE: "analyze"
           PYTHONUNBUFFERED: "1"
-        run: python3 .github/scripts/analyze_log.py
+        run: python3 .github/scripts/agent.py
 
       # Tool 4 — Slack MCP: post structured diagnosis and request human YES/NO
       - name: "Step 1b — Notify Slack (Approval Required)"
@@ -129,16 +131,18 @@ jobs:
           name: ci-analysis
 
       # Tool 5 — GitHub MCP: apply file patch + create fix PR
-      - name: "Step 2 — Create Fix PR (git + gh)"
+      - name: "Step 2 — AI Agent: fix (read_analysis → apply_patch → create_pull_request)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           RUN_ID: ${{ github.run_id }}
-          REPO: ${{ github.repository }}
           GITHUB_ACTOR: ${{ github.actor }}
           COMMIT_SHA: ${{ github.sha }}
           TRIGGER_BRANCH: ${{ github.ref_name }}
+          AGENT_MODE: "fix"
           PYTHONUNBUFFERED: "1"
-        run: python3 .github/scripts/create_pr.py
+        run: python3 .github/scripts/agent.py
 
       # Tool 4 — Slack MCP: confirm PR was created
       - name: "Step 2b — Notify Slack (PR Created)"
