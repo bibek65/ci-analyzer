@@ -107,7 +107,7 @@ jobs:
   approve-and-fix:
     name: approve-and-fix
     needs: analyze-failure
-    if: needs.analyze-failure.result == 'success'
+    if: always() && needs.analyze-failure.result == 'success'
     runs-on: ubuntu-latest
     environment: fix-approval
     permissions:
@@ -159,7 +159,7 @@ jobs:
   notify-rejection:
     name: notify-rejection
     needs: approve-and-fix
-    if: needs.approve-and-fix.result == 'failure' || needs.approve-and-fix.result == 'cancelled'
+    if: always() && (needs.approve-and-fix.result == 'failure' || needs.approve-and-fix.result == 'cancelled')
     runs-on: ubuntu-latest
 
     steps:
