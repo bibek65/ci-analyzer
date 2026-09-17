@@ -23,17 +23,16 @@ jobs:
 
   # ─── Job 2: AI Failure Analyzer ──────────────────────────────────────────────
   # Triggered only when the build job fails (if: failure()).
-  # Two steps in one job so the log file written in Step 1 is available to Step 2
-  # without needing artifact upload/download between jobs.
-  # If Step 1 (analysis) fails, Step 2 (PR creation) is automatically skipped.
+  # Downloads CI logs, runs RAG + Gemini analysis, notifies Slack for approval.
+  # Uploads analysis.json as an artifact for the next job to consume.
   analyze-failure:
     name: analyze-failure
     needs: build
     if: failure()
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      actions: read
 
     steps:
       - name: Checkout code
@@ -63,10 +62,10 @@ jobs:
 
           echo "Log downloaded: $(wc -l < ci_failure.log) lines"
 
-      # ── Step 1: AI analysis (Tools 1–4) ──────────────────────────────────────
-      # Extracts error lines → searches knowledge base → Gemini analysis → Gemini PR draft
-      # Writes analysis.json — read by Step 2.
-      # If this step fails, Step 2 is automatically skipped.
+      # Simultaneously applies:
+      #   Tool 1 — GitHub API  : CI logs already downloaded above
+      #   Tool 2 — RAG / KB    : keyword-scored knowledge base search in script
+      #   Tool 3 — Gemini      : root cause analysis + PR description in one call
       - name: "Step 1 — AI Log Analysis (RAG + Gemini)"
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -75,9 +74,60 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python3 .github/scripts/analyze_log.py
 
-      # ── Step 2: Create PR (Tool 5) ────────────────────────────────────────────
-      # Pure git + GitHub CLI. No AI calls. Reads analysis.json from Step 1.
-      # GEMINI_API_KEY not needed here — better secrets hygiene.
+      # Tool 4 — Slack MCP: post structured diagnosis and request human YES/NO
+      - name: "Step 1b — Notify Slack (Approval Required)"
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_ID: ${{ github.run_id }}
+          TRIGGER_BRANCH: ${{ github.ref_name }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NOTIFICATION_TYPE: "approval"
+          PYTHONUNBUFFERED: "1"
+        run: python3 .github/scripts/notify_slack.py
+
+      # Pass analysis.json to the approval job without re-running the analysis
+      - name: Upload analysis artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-analysis
+          path: analysis.json
+          retention-days: 1
+
+  # ─── Job 3: Human Approval Gate ──────────────────────────────────────────────
+  # Pauses here until a human approves or rejects in GitHub Actions.
+  # Requires the "fix-approval" environment to be created in repo Settings →
+  # Environments → fix-approval → Required reviewers.
+  #
+  # YES (approved) → runs Step 2 (create PR) + notifies Slack (success)
+  # NO  (rejected) → job is skipped; notify-rejection job sends Slack notification
+  approve-and-fix:
+    name: approve-and-fix
+    needs: analyze-failure
+    if: needs.analyze-failure.result == 'success'
+    runs-on: ubuntu-latest
+    environment: fix-approval
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Python 3.14
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Download analysis artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-analysis
+
+      # Tool 5 — GitHub MCP: apply file patch + create fix PR
       - name: "Step 2 — Create Fix PR (git + gh)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -88,3 +138,52 @@ jobs:
           TRIGGER_BRANCH: ${{ github.ref_name }}
           PYTHONUNBUFFERED: "1"
         run: python3 .github/scripts/create_pr.py
+
+      # Tool 4 — Slack MCP: confirm PR was created
+      - name: "Step 2b — Notify Slack (PR Created)"
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_ID: ${{ github.run_id }}
+          TRIGGER_BRANCH: ${{ github.ref_name }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NOTIFICATION_TYPE: "success"
+          PYTHONUNBUFFERED: "1"
+        run: python3 .github/scripts/notify_slack.py
+
+  # ─── Job 4: Rejection Notification ───────────────────────────────────────────
+  # Runs only when the approval job was rejected or timed out.
+  # Sends a Slack message asking the human to fix the failure manually.
+  notify-rejection:
+    name: notify-rejection
+    needs: approve-and-fix
+    if: needs.approve-and-fix.result == 'failure' || needs.approve-and-fix.result == 'cancelled'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Python 3.14
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Download analysis artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-analysis
+        continue-on-error: true
+
+      # Tool 4 — Slack MCP: inform team that fix was not approved
+      - name: "Notify Slack (Fix Rejected)"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_ID: ${{ github.run_id }}
+          TRIGGER_BRANCH: ${{ github.ref_name }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NOTIFICATION_TYPE: "rejected"
+          PYTHONUNBUFFERED: "1"
+        run: python3 .github/scripts/notify_slack.py
