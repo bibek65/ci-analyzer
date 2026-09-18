@@ -42,7 +42,7 @@ CHROMA_API_KEY  = os.environ.get("CHROMA_API_KEY", "")
 CHROMA_TENANT   = os.environ.get("CHROMA_TENANT", "")
 CHROMA_DATABASE = os.environ.get("CHROMA_DATABASE", "default_database")
 CHROMA_COLLECTION = "ci_failures"
-EMBED_MODEL     = "text-embedding-004"
+EMBED_MODEL     = "gemini-embedding-001"
 
 LOG_FILE        = "ci_failure.log"
 ANALYSIS_FILE   = "analysis.json"
@@ -130,7 +130,7 @@ def read_ci_logs() -> dict:
 def search_knowledge_base(query: str) -> dict:
     """
     Search ChromaDB Cloud for past CI failures semantically similar to the query.
-    Uses Gemini text-embedding-004 to convert the query into a vector, then finds
+    Uses Gemini gemini-embedding-001 to convert the query into a vector, then finds
     the closest matches in the ci_failures collection.
     Call this after read_ci_logs with key error terms you observed.
     """

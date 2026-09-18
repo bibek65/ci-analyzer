@@ -1,14 +1,3 @@
-"""
-embed_failures.py — Run this ONCE locally to populate ChromaDB Cloud.
-
-Embeds 10 CI failure patterns using Gemini embedding API and pushes
-them to your ChromaDB Cloud collection.
-
-Usage:
-    GEMINI_API_KEY=... CHROMA_API_KEY=... CHROMA_TENANT=... CHROMA_DATABASE=... \
-    python3 .github/scripts/embed_failures.py
-"""
-
 import os
 import sys
 import chromadb
@@ -19,7 +8,7 @@ CHROMA_API_KEY  = os.environ.get("CHROMA_API_KEY", "")
 CHROMA_TENANT   = os.environ.get("CHROMA_TENANT", "")
 CHROMA_DATABASE = os.environ.get("CHROMA_DATABASE", "default_database")
 COLLECTION_NAME = "ci_failures"
-EMBED_MODEL     = "text-embedding-004"
+EMBED_MODEL     = "gemini-embedding-001"
 
 if not GEMINI_API_KEY:
     print("ERROR: GEMINI_API_KEY not set"); sys.exit(1)
@@ -90,7 +79,7 @@ def get_embedding(text: str) -> list:
         model=EMBED_MODEL,
         contents=text,
     )
-    # SDK v2: embeddings[0].values is a list of floats
+    # The modern SDK returns an array of embeddings under `embeddings`
     return list(result.embeddings[0].values)
 
 # ── ChromaDB Cloud ────────────────────────────────────────────────────────────
