@@ -1,0 +1,51 @@
+name: Notify Rejection
+
+# workflow_run fires AFTER the main workflow completes — even when it is
+# cancelled by an environment-protection rejection, which prevents any
+# remaining jobs in that workflow from running despite always() conditions.
+on:
+  workflow_run:
+    workflows: ["CI + AI Failure Analyzer"]
+    types: [completed]
+
+jobs:
+  notify-if-rejected:
+    name: notify-if-rejected
+    runs-on: ubuntu-latest
+    # Only when the main workflow was cancelled (environment gate rejected)
+    if: github.event.workflow_run.conclusion == 'cancelled'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Python 3.14
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.14"
+
+      # Download the analysis artifact from the cancelled run so the Slack
+      # message can include error_type, root_cause, etc.
+      - name: Download analysis artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-analysis
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      # Only send if the artifact exists — meaning analyze phase succeeded and
+      # the cancellation happened at the environment approval gate (a rejection).
+      - name: "Notify Slack (Fix Rejected)"
+        if: steps.download.outcome == 'success'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          TRIGGER_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DEMO_SCENARIO: ${{ github.event.workflow_run.name }}
+          NOTIFICATION_TYPE: "rejected"
+          PYTHONUNBUFFERED: "1"
+        run: python3 .github/scripts/notify_slack.py

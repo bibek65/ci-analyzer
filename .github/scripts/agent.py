@@ -172,7 +172,7 @@ def search_knowledge_base(query: str) -> dict:
     matches = []
     for doc, meta, distance in zip(docs, metas, distances):
         similarity = round(1 - distance, 2)
-        if similarity >= 0.6:
+        if similarity >= 0.5:
             matches.append({
                 "similarity": similarity,
                 "category": meta.get("category", "unknown"),
