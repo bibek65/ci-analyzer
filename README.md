@@ -334,3 +334,4 @@ The agent still **behaves like it's using MCP** — Gemini calls named tools, ge
 The AI **proposes** the fix. A human **reviews and approves** before any PR is created. The agent never pushes directly to main, never merges its own PR, and every PR description ends with:
 
 > ⚠️ This fix was proposed by AI analysis. Review before merging.
+
