@@ -45,7 +45,7 @@ jobs:
           python-version: "3.14"
 
       - name: Install dependencies
-        run: pip install google-genai==2.20.0
+        run: pip install google-genai==2.20.0 chromadb==1.0.0
 
       - name: Download failed build job logs
         env:
@@ -71,6 +71,9 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
+          CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
+          CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
           RUN_ID: ${{ github.run_id }}
           TRIGGER_BRANCH: ${{ github.ref_name }}
           AGENT_MODE: "analyze"
@@ -131,7 +134,7 @@ jobs:
           name: ci-analysis
 
       - name: Install dependencies
-        run: pip install google-genai==2.20.0
+        run: pip install google-genai==2.20.0 chromadb==1.0.0
 
       # Tool 5 — GitHub MCP: apply file patch + create fix PR
       - name: "Step 2 — AI Agent: fix (read_analysis → apply_patch → create_pull_request)"

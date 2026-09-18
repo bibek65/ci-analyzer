@@ -21,6 +21,7 @@ import warnings
 
 warnings.filterwarnings("ignore", message=".*automatic function calling.*")
 
+import chromadb
 from google import genai
 from google.genai import types
 
@@ -35,6 +36,13 @@ GITHUB_ACTOR    = os.environ.get("GITHUB_ACTOR", "ci-bot")
 COMMIT_SHA      = os.environ.get("COMMIT_SHA", "unknown")
 SHORT_SHA       = COMMIT_SHA[:7]
 SAFE_TRIGGER    = TRIGGER_BRANCH.replace("/", "-")
+
+# ChromaDB Cloud — set these as GitHub repo secrets
+CHROMA_API_KEY  = os.environ.get("CHROMA_API_KEY", "")
+CHROMA_TENANT   = os.environ.get("CHROMA_TENANT", "")
+CHROMA_DATABASE = os.environ.get("CHROMA_DATABASE", "default_database")
+CHROMA_COLLECTION = "ci_failures"
+EMBED_MODEL     = "models/text-embedding-004"
 
 LOG_FILE        = "ci_failure.log"
 ANALYSIS_FILE   = "analysis.json"
@@ -55,41 +63,6 @@ ERROR_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-KNOWN_FAILURES = [
-    {
-        "keywords": ["eresolve", "peer", "dependency", "npm", "react"],
-        "error": "npm ERESOLVE peer dependency conflict",
-        "category": "nodejs",
-        "past_fix": (
-            "Align both packages to the same major version. "
-            "Example: react@17 + react-dom@18 → both to react@18 + react-dom@18."
-        ),
-    },
-    {
-        "keywords": ["ecr", "cannotpull", "ecs", "private subnet", "nat"],
-        "error": "ECS task failed to pull container image from ECR",
-        "category": "aws-ecs",
-        "past_fix": "Add a NAT gateway to the private subnet or use a public subnet with auto-assign public IP.",
-    },
-    {
-        "keywords": ["modulenotfounderror", "pytest", "venv", "activate"],
-        "error": "pytest ModuleNotFoundError — venv not activated",
-        "category": "python",
-        "past_fix": "Run pytest via .venv/bin/pytest or activate the venv before the test step.",
-    },
-    {
-        "keywords": ["403", "resource not accessible", "pull-requests", "github_token"],
-        "error": "GitHub Actions 403 — GITHUB_TOKEN missing pull-requests write permission",
-        "category": "github-actions",
-        "past_fix": "Add permissions: contents: write, pull-requests: write to the workflow job.",
-    },
-    {
-        "keywords": ["postgres", "connection refused", "5432", "service container"],
-        "error": "Integration tests fail — postgres service container not ready",
-        "category": "database",
-        "past_fix": "Add a healthcheck to the postgres service and a wait step before running tests.",
-    },
-]
 
 
 # ── Retry helper ──────────────────────────────────────────────────────────────
@@ -156,28 +129,64 @@ def read_ci_logs() -> dict:
 
 def search_knowledge_base(query: str) -> dict:
     """
-    Search the knowledge base of past CI failures for a pattern matching the query.
-    Call this after read_ci_logs with a short description of the error you observed.
+    Search ChromaDB Cloud for past CI failures semantically similar to the query.
+    Uses Gemini text-embedding-004 to convert the query into a vector, then finds
+    the closest matches in the ci_failures collection.
+    Call this after read_ci_logs with key error terms you observed.
     """
-    lower = query.lower()
-    best, best_score = None, 0
-    for entry in KNOWN_FAILURES:
-        score = sum(1 for k in entry["keywords"] if k in lower)
-        if score > best_score:
-            best_score, best = score, entry
+    if not CHROMA_API_KEY or not CHROMA_TENANT:
+        print(f"  [search_knowledge_base] CHROMA_API_KEY/CHROMA_TENANT not set — skipping RAG")
+        return {"matched": False, "similarity": 0.0, "reason": "ChromaDB not configured"}
 
-    if best and best_score >= 1:
-        similarity = round(best_score / len(best["keywords"]), 2)
-        print(f"  [search_knowledge_base] matched '{best['error']}' similarity={similarity}")
+    # Embed the query with Gemini
+    embed_result = client.models.embed_content(
+        model=EMBED_MODEL,
+        contents=query,
+    )
+    query_vector = embed_result.embeddings[0].values
+
+    # Query ChromaDB Cloud
+    chroma = chromadb.HttpClient(
+        ssl=True,
+        host="api.trychroma.com",
+        tenant=CHROMA_TENANT,
+        database=CHROMA_DATABASE,
+        headers={"x-chroma-token": CHROMA_API_KEY},
+    )
+    collection = chroma.get_collection(CHROMA_COLLECTION)
+    results = collection.query(
+        query_embeddings=[query_vector],
+        n_results=3,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    matches = []
+    for doc, meta, distance in zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["distances"][0],
+    ):
+        similarity = round(1 - distance, 2)
+        if similarity >= 0.6:
+            matches.append({
+                "similarity": similarity,
+                "category": meta.get("category", "unknown"),
+                "severity": meta.get("severity", "unknown"),
+                "past_fix": doc,
+            })
+
+    if matches:
+        best = matches[0]
+        print(f"  [search_knowledge_base] best match: [{best['category']}] similarity={best['similarity']}")
         return {
             "matched": True,
-            "similarity": similarity,
-            "error": best["error"],
+            "similarity": best["similarity"],
             "category": best["category"],
             "past_fix": best["past_fix"],
+            "all_matches": matches,
         }
 
-    print(f"  [search_knowledge_base] no match found")
+    print(f"  [search_knowledge_base] no match above 0.60 threshold")
     return {"matched": False, "similarity": 0.0}
 
 
