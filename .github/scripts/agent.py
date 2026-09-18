@@ -160,12 +160,17 @@ def search_knowledge_base(query: str) -> dict:
         include=["documents", "metadatas", "distances"],
     )
 
+    docs = results["documents"][0]
+    metas = results["metadatas"][0]
+    distances = results["distances"][0]
+
+    print(f"  [search_knowledge_base] ChromaDB returned {len(docs)} result(s)")
+    for i, (doc, meta, distance) in enumerate(zip(docs, metas, distances)):
+        sim = round(1 - distance, 2)
+        print(f"    result[{i}] similarity={sim} category={meta.get('category')} doc={doc[:60]!r}")
+
     matches = []
-    for doc, meta, distance in zip(
-        results["documents"][0],
-        results["metadatas"][0],
-        results["distances"][0],
-    ):
+    for doc, meta, distance in zip(docs, metas, distances):
         similarity = round(1 - distance, 2)
         if similarity >= 0.6:
             matches.append({
