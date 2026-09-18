@@ -87,7 +87,7 @@ A single script that runs a **Gemini function-calling loop**. Gemini autonomousl
 | Tool | What Gemini uses it for |
 |---|---|
 | `read_ci_logs()` | Reads `ci_failure.log`, extracts only error lines + 3 lines of context. Reduces ~200 log lines to ~26 (89% token savings). |
-| `search_knowledge_base(query)` | Scores the query against 5 known failure patterns by keyword overlap. Returns the best match with similarity score and a proven past fix. |
+| `search_knowledge_base(query)` | Embeds the query with `gemini-embedding-001`, queries ChromaDB Cloud for the nearest stored failure pattern (cosine similarity ≥ 0.60). Returns the best match and its proven past fix. |
 | `write_analysis(...)` | Saves 12 structured fields to `analysis.json` including `error_type`, `root_cause`, `patch_type`, `search_string`, `replacement_string`, `pr_title`, `pr_description`. |
 
 #### Fix mode tools
@@ -143,6 +143,56 @@ MODEL_PRIORITY = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
 
 If the primary model hits its daily quota, the agent automatically retries with the next model. No manual intervention needed.
 
+#### How Gemini derives `search_string` and `replacement_string`
+
+Gemini never reads `package.json` directly. It infers both values from the error log alone.
+
+The npm error output contains everything it needs:
+
+```
+npm ERR! peer react@"^18.0.0" from react-dom@18.0.0   ← what is required
+npm ERR! Found: react@17.0.2                            ← what is installed (the bug)
+```
+
+From this, Gemini reasons:
+- `search_string` = the current broken value in the file → `"react": "17.0.2"`
+- `replacement_string` = what it needs to become → `"react": "18.0.0"`
+
+Then `apply_patch` does a plain Python string replace on the file:
+
+```python
+new_content = content.replace(search_string, replacement_string, 1)
+```
+
+The file is read, the exact substring is swapped, and the file is written back. Gemini is the brain that decides what to swap — `apply_patch` is the hand that makes the change.
+
+#### How `apply_patch` prevents double-applying
+
+Before writing, it checks whether `replacement_string` is already in the file:
+
+```python
+if replacement_string and replacement_string in content:
+    return {"patched": False, "reason": "patch already applied"}
+```
+
+If the fix job is re-run (e.g. after a timeout), it won't corrupt the file by applying the same patch twice.
+
+#### How `analysis.json` travels between jobs
+
+`write_analysis` saves the diagnosis to disk on the analyze runner. The workflow then uploads it as a GitHub Actions artifact and the fix job downloads it on a completely different runner:
+
+```
+analyze-failure runner          approve-and-fix runner
+      │                                │
+  analysis.json                        │
+      │                                │
+  upload-artifact ──── GitHub ──── download-artifact
+                      storage              │
+                                      analysis.json
+```
+
+Without the artifact, the fix job would have no knowledge of what the analyze job found.
+
 ---
 
 ### 4. `notify_slack.py` — Slack Notifications
@@ -161,12 +211,26 @@ Three notification types, controlled by `NOTIFICATION_TYPE` env var:
 
 ## Setup
 
+### One-time setup — populate ChromaDB
+
+Run this once locally to embed the 10 CI failure patterns into ChromaDB Cloud:
+
+```bash
+GEMINI_API_KEY=... CHROMA_API_KEY=... CHROMA_TENANT=... CHROMA_DATABASE=... \
+python3 .github/scripts/embed_failures.py
+```
+
+This uses `gemini-embedding-001` to embed each failure document and stores them in the `ci_failures` collection. Only needs to run again if you add new failure patterns.
+
 ### Secrets (repo → Settings → Secrets and variables → Actions → Secrets)
 
 | Secret | Required | Value |
 |---|---|---|
 | `GEMINI_API_KEY` | Yes | API key from [aistudio.google.com](https://aistudio.google.com) |
 | `SLACK_WEBHOOK_URL` | Yes | Webhook URL from Slack Workflow Builder |
+| `CHROMA_API_KEY` | Yes | API key from [trychroma.com](https://trychroma.com) |
+| `CHROMA_TENANT` | Yes | Tenant ID from ChromaDB Cloud dashboard |
+| `CHROMA_DATABASE` | No | Database name (defaults to `default_database`) |
 
 ### Variables (repo → Settings → Secrets and variables → Actions → Variables)
 
