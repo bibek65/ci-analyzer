@@ -4,6 +4,17 @@ on:
   push:
     branches: [main, dev]
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Demo scenario to inject"
+        required: true
+        default: "npm-conflict"
+        type: choice
+        options:
+          - npm-conflict        # KB HIT  — react peer dependency mismatch
+          - missing-script      # KB HIT  — package.json missing start script
+          - bad-json            # NO HIT  — malformed package.json syntax
+          - wrong-engine        # NO HIT  — node engine version constraint fails
 
 jobs:
   # ─── Job 1: Build ────────────────────────────────────────────────────────────
@@ -19,13 +30,67 @@ jobs:
         with:
           node-version: "24"
 
+      # Inject the chosen demo scenario before running npm install.
+      # On a push (not workflow_dispatch) the default bug in package.json is used.
+      - name: Inject demo scenario
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          SCENARIO: ${{ github.event.inputs.scenario }}
+        run: |
+          echo "Injecting scenario: $SCENARIO"
+          case "$SCENARIO" in
+
+            npm-conflict)
+              # KB HIT — react@17 + react-dom@18 peer conflict (matches 'nodejs' KB entry)
+              node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
+                pkg.dependencies = pkg.dependencies || {};
+                pkg.dependencies['react'] = '17.0.2';
+                pkg.dependencies['react-dom'] = '18.0.0';
+                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+              "
+              ;;
+
+            missing-script)
+              # KB HIT — removes the "start" script so npm start fails (matches 'nodejs' KB)
+              node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
+                pkg.scripts = {};
+                pkg.dependencies = { 'express': '4.18.0' };
+                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+              "
+              # Also create a fake index.js that requires a module that doesn't exist
+              echo "require('nonexistent-module');" > src/index.js
+              ;;
+
+            bad-json)
+              # NO KB HIT — corrupts package.json with invalid JSON (agent must reason alone)
+              echo '{ "name": "ci-analyzer-demo", "version": "1.0.0", INVALID_JSON }' > package.json
+              ;;
+
+            wrong-engine)
+              # NO KB HIT — sets engines.node to an old unsupported version (agent must reason alone)
+              node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
+                pkg.engines = { 'node': '>=8.0.0 <12.0.0' };
+                pkg.dependencies = { 'react': '18.0.0', 'react-dom': '18.0.0' };
+                fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+              "
+              # Force npm to respect the engine constraint
+              echo 'engine-strict=true' > .npmrc
+              ;;
+          esac
+
+          echo "--- package.json after injection ---"
+          cat package.json
+
       - name: Install dependencies
         run: npm install
 
   # ─── Job 2: AI Failure Analyzer ──────────────────────────────────────────────
-  # Triggered only when the build job fails (if: failure()).
-  # Downloads CI logs, runs RAG + Gemini analysis, notifies Slack for approval.
-  # Uploads analysis.json as an artifact for the next job to consume.
   analyze-failure:
     name: analyze-failure
     needs: build
@@ -72,6 +137,7 @@ jobs:
           CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
           RUN_ID: ${{ github.run_id }}
           TRIGGER_BRANCH: ${{ github.ref_name }}
+          DEMO_SCENARIO: ${{ github.event.inputs.scenario }}
           AGENT_MODE: "analyze"
           PYTHONUNBUFFERED: "1"
         run: python3 .github/scripts/agent.py
@@ -84,11 +150,11 @@ jobs:
           TRIGGER_BRANCH: ${{ github.ref_name }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          DEMO_SCENARIO: ${{ github.event.inputs.scenario }}
           NOTIFICATION_TYPE: "approval"
           PYTHONUNBUFFERED: "1"
         run: python3 .github/scripts/notify_slack.py
 
-      # Pass analysis.json to the approval job without re-running the analysis
       - name: Upload analysis artifact
         if: success()
         uses: actions/upload-artifact@v4
@@ -98,12 +164,6 @@ jobs:
           retention-days: 1
 
   # ─── Job 3: Human Approval Gate ──────────────────────────────────────────────
-  # Pauses here until a human approves or rejects in GitHub Actions.
-  # Requires the "fix-approval" environment to be created in repo Settings →
-  # Environments → fix-approval → Required reviewers.
-  #
-  # YES (approved) → runs Step 2 (create PR) + notifies Slack (success)
-  # NO  (rejected) → job is skipped; notify-rejection job sends Slack notification
   approve-and-fix:
     name: approve-and-fix
     needs: analyze-failure
@@ -157,8 +217,6 @@ jobs:
         run: python3 .github/scripts/notify_slack.py
 
   # ─── Job 4: Rejection Notification ───────────────────────────────────────────
-  # Runs only when the approval job was rejected or timed out.
-  # Sends a Slack message asking the human to fix the failure manually.
   notify-rejection:
     name: notify-rejection
     needs: approve-and-fix

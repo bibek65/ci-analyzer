@@ -44,6 +44,11 @@ FAILURES = [
         "metadata": {"category": "nodejs", "severity": "medium"}
     },
     {
+        "id": "fail_005b",
+        "document": "Node.js build failed: Cannot find module 'nonexistent-module'. Error: MODULE_NOT_FOUND. Root cause: package.json dependencies list a module that is not installed or does not exist on npm. Fix: remove the nonexistent require() call from the source file or add the correct package name to dependencies in package.json.",
+        "metadata": {"category": "nodejs", "severity": "medium"}
+    },
+    {
         "id": "fail_006",
         "document": "GitHub Actions step failed: Error Resource not accessible by integration. Automated PR creation via GitHub API returns 403. Root cause: workflow GITHUB_TOKEN does not have write permissions for pull-requests scope. Fix: add permissions block with pull-requests write to the workflow YAML file.",
         "metadata": {"category": "github-actions", "severity": "low"}

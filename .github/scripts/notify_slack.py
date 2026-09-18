@@ -27,6 +27,7 @@ GITHUB_REPOSITORY     = os.environ.get("GITHUB_REPOSITORY", "")
 RUN_ID                = os.environ.get("RUN_ID", "unknown")
 TRIGGER_BRANCH        = os.environ.get("TRIGGER_BRANCH", "main")
 NOTIFICATION_TYPE     = os.environ.get("NOTIFICATION_TYPE", "approval")
+DEMO_SCENARIO         = os.environ.get("DEMO_SCENARIO", "")
 
 if not SLACK_WEBHOOK_URL:
     print("WARNING: SLACK_WEBHOOK_URL not set — skipping Slack notification")
@@ -42,6 +43,7 @@ if os.path.exists(ANALYSIS_FILE):
 payload = {
     "notification_type": NOTIFICATION_TYPE,
     "trigger_branch":    TRIGGER_BRANCH,
+    "demo_scenario":     DEMO_SCENARIO if DEMO_SCENARIO else "push-triggered",
     "error_type":        data.get("error_type", "unknown"),
     "root_cause":        data.get("root_cause", "—"),
     "severity":          data.get("severity", "—"),
