@@ -53,16 +53,17 @@ jobs:
               ;;
 
             missing-script)
-              # KB HIT — removes the "start" script so npm start fails (matches 'nodejs' KB)
+              # KB HIT — adds a nonexistent package to dependencies, npm install 404s
               node -e "
                 const fs = require('fs');
                 const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
-                pkg.scripts = {};
-                pkg.dependencies = { 'express': '4.18.0' };
+                pkg.dependencies = {
+                  'react': '18.0.0',
+                  'react-dom': '18.0.0',
+                  'nonexistent-package-xyz-demo-99999': '1.0.0'
+                };
                 fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
               "
-              # Also create a fake index.js that requires a module that doesn't exist
-              echo "require('nonexistent-module');" > src/index.js
               ;;
 
             bad-json)

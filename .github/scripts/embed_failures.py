@@ -45,7 +45,7 @@ FAILURES = [
     },
     {
         "id": "fail_005b",
-        "document": "Node.js build failed: Cannot find module 'nonexistent-module'. Error: MODULE_NOT_FOUND. Root cause: package.json dependencies list a module that is not installed or does not exist on npm. Fix: remove the nonexistent require() call from the source file or add the correct package name to dependencies in package.json.",
+        "document": "Node.js build failed: npm ERR! 404 Not Found. npm ERR! 404 package not found. Root cause: package.json lists a dependency that does not exist in the npm registry. Fix: remove the nonexistent package from dependencies in package.json and run npm install again.",
         "metadata": {"category": "nodejs", "severity": "medium"}
     },
     {
