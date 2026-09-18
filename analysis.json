@@ -1,0 +1,16 @@
+{
+  "run_id": "35297808428",
+  "model": "gemini-3.1-flash-lite",
+  "error_type": "npm-dependency",
+  "error_slug": "npm-dependency-conflict",
+  "root_cause": "Incompatible versions of react and react-dom defined in package.json.",
+  "affected_file": "package.json",
+  "patch_type": "search_replace",
+  "search_string": "    \"react\": \"17.0.2\",\n    \"react-dom\": \"18.0.0\"",
+  "replacement_string": "    \"react\": \"^18.0.0\",\n    \"react-dom\": \"^18.0.0\"",
+  "fix_command": "npm install",
+  "severity": "high",
+  "confidence": "high",
+  "pr_title": "Fix React dependency version mismatch",
+  "pr_description": "## Problem\nThe CI build failed during `npm install` due to a dependency conflict. The project is trying to use `react@17.0.2` while `react-dom@18.0.0` requires `react@^18.0.0`.\n\n## Root Cause\nThere is a version mismatch in `package.json` where `react` and `react-dom` are incompatible.\n\n## Proposed Fix\n```\n\"react\": \"^18.0.0\",\n\"react-dom\": \"^18.0.0\"\n```\n\n## How to Verify\n- Run `npm install` locally to ensure the dependency tree resolves correctly.\n- Push the changes to trigger the CI pipeline.\n\n\u26a0\ufe0f This fix was proposed by AI analysis. Review before merging."
+}
