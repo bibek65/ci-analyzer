@@ -80,118 +80,169 @@ Intentional version mismatch. `npm install` fails, which activates the entire AI
 
 ### 3. `agent.py` — The AI Agent (both modes)
 
-A single script that runs a **Gemini function-calling loop**. Gemini autonomously decides which tools to call, in what order, and when it has enough information to stop.
+A single script, two modes (`AGENT_MODE=analyze` / `AGENT_MODE=fix`), driven by a Gemini function-calling loop. Gemini autonomously decides which tools to call, in what order, and when to stop.
 
-#### Analyze mode tools
+---
 
-| Tool | What Gemini uses it for |
-|---|---|
-| `read_ci_logs()` | Reads `ci_failure.log`, extracts only error lines + 3 lines of context. Reduces ~200 log lines to ~26 (89% token savings). |
-| `search_knowledge_base(query)` | Embeds the query with `gemini-embedding-001`, queries ChromaDB Cloud for the nearest stored failure pattern (cosine similarity ≥ 0.60). Returns the best match and its proven past fix. |
-| `write_analysis(...)` | Saves 12 structured fields to `analysis.json` including `error_type`, `root_cause`, `patch_type`, `search_string`, `replacement_string`, `pr_title`, `pr_description`. |
+#### § Configuration
 
-#### Fix mode tools
+At startup the script builds two key things:
 
-| Tool | What Gemini uses it for |
-|---|---|
-| `read_analysis()` | Loads `analysis.json` from the analyze phase. |
-| `apply_patch(...)` | Applies `search_replace`, `prepend`, or `append` patch to the affected file. Has a duplicate guard — skips if the fix is already present. |
-| `create_pull_request(...)` | Creates/reuses git fix branch, stages changed files, commits, pushes, opens PR via `gh pr create`. |
-
-#### The agentic loop
-
+**`MODEL_PRIORITY`** — deduplicated fallback list:
 ```python
-contents = ["A GitHub Actions build has failed. Diagnose it."]
+[GEMINI_MODEL, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+```
+If the `GEMINI_MODEL` secret is set it goes first. When a model hits its daily quota, the agent moves to the next automatically.
 
-for turn in range(MAX_TURNS):
-    response = gemini.generate(contents, tools=tools)
-    contents.append(response)                          # grow conversation history
-
-    function_calls = extract_function_calls(response)
-
-    if not function_calls:
-        break                                          # agent is done
-
-    for fc in function_calls:
-        result = TOOL_REGISTRY[fc.name](**fc.args)    # execute the tool
-        contents.append(tool_response(fc.name, result))  # feed result back
+**`ERROR_PATTERNS`** — regex that flags log lines worth keeping:
+```
+error | err  | failed | failure | exception | traceback |
+exit code [^0] | cannot | fatal | eresolve | enoent | permission denied
 ```
 
-Each turn is one Gemini API call. The model sees the full conversation so far (including all previous tool results) and decides what to do next. When it stops emitting function calls, the loop ends.
+---
 
-**Real tool call trace from a live run:**
+#### § `with_retry`
+
+Wraps every Gemini API call. On `429 / 503 / RESOURCE_EXHAUSTED` it waits and retries up to 5 times. Uses the suggested `retry in Xs` delay from the error if present, otherwise exponential backoff. Without this, a single noisy minute on the free tier would crash the pipeline.
+
+---
+
+#### § Analyze mode — tool sequence
+
+**Tool 1: `read_ci_logs()`**
+
+Reads `ci_failure.log`, finds every line matching `ERROR_PATTERNS`, keeps those lines plus 3 lines of context above and below each match, caps at 120 lines total.
+
 ```
-Turn 1 → read_ci_logs()
-         ← 206 lines → 26 error lines (89% token reduction)
-
-Turn 2 → search_knowledge_base(query='npm error ERESOLVE unable to resolve dependency')
-         ← matched: npm ERESOLVE peer dependency conflict, similarity: 0.8
-
-Turn 3 → write_analysis(error_type='npm-dependency', patch_type='search_replace',
-                         search_string='"react": "17.0.2"',
-                         replacement_string='"react": "18.0.0"', severity='high', ...)
-         ← saved analysis.json ✅
-
-Turn 4 → (no tool calls) — agent done
-```
-
-#### Model fallback chain
-
-```python
-MODEL_PRIORITY = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+Input : ci_failure.log (206 lines)
+Output: 26 error lines — 89% token reduction
 ```
 
-If the primary model hits its daily quota, the agent automatically retries with the next model. No manual intervention needed.
+**Tool 2: `search_knowledge_base(query)`**
 
-#### How Gemini derives `search_string` and `replacement_string`
+Takes the key error terms Gemini extracted from the log. Embeds the query with `gemini-embedding-001` (768-dimensional vector), queries ChromaDB Cloud, filters results to cosine similarity ≥ 0.60, returns the best matching past failure and its proven fix.
 
-Gemini never reads `package.json` directly. It infers both values from the error log alone.
+```
+Input : "npm ERESOLVE unable to resolve dependency tree"
+Output: { matched: true, similarity: 0.82, category: "nodejs",
+          past_fix: "...upgrade react-testing-library to 13..." }
+```
 
-The npm error output contains everything it needs:
+When a match is found, Gemini gets a proven fix injected into context and doesn't have to reason from scratch.
 
+**Tool 3: `write_analysis(...)`**
+
+Gemini fills in 12 structured fields and this tool writes them to `analysis.json`:
+
+| Field | Example |
+|---|---|
+| `error_type` | `npm-dependency` |
+| `patch_type` | `search_replace` |
+| `search_string` | `"react": "17.0.2"` |
+| `replacement_string` | `"react": "18.0.0"` |
+| `affected_file` | `package.json` |
+| `severity` / `confidence` | `high` / `high` |
+| `pr_title` | `fix(deps): align react to 18.0.0` |
+| `pr_description` | Full markdown: Problem / Root Cause / Fix / Verify |
+
+**How Gemini knows what to put in `search_string` / `replacement_string`:** It reads the npm error output, which contains both values explicitly:
 ```
 npm ERR! peer react@"^18.0.0" from react-dom@18.0.0   ← what is required
-npm ERR! Found: react@17.0.2                            ← what is installed (the bug)
+npm ERR! Found: react@17.0.2                            ← what is installed
 ```
+Gemini never reads `package.json` directly — it infers the broken value and the correct value from the error message alone.
 
-From this, Gemini reasons:
-- `search_string` = the current broken value in the file → `"react": "17.0.2"`
-- `replacement_string` = what it needs to become → `"react": "18.0.0"`
+---
 
-Then `apply_patch` does a plain Python string replace on the file:
+#### § Fix mode — tool sequence
+
+**Tool 1: `read_analysis()`**
+
+Loads `analysis.json` from disk (downloaded artifact). The fix job runs on a different VM with no memory of the analyze phase — this is how the diagnosis crosses the job boundary.
+
+**Tool 2: `apply_patch(...)`**
+
+Reads the affected file, finds `search_string`, replaces it with `replacement_string`:
 
 ```python
 new_content = content.replace(search_string, replacement_string, 1)
 ```
 
-The file is read, the exact substring is swapped, and the file is written back. Gemini is the brain that decides what to swap — `apply_patch` is the hand that makes the change.
+Has a duplicate guard — if `replacement_string` is already in the file it skips without error. This means the job can be re-run safely without corrupting the file.
 
-#### How `apply_patch` prevents double-applying
+**Tool 3: `create_pull_request(...)`**
 
-Before writing, it checks whether `replacement_string` is already in the file:
+1. Names the branch from `error_type`: `fix/main-npm-dependency`
+2. Sets git identity using `GITHUB_ACTOR`
+3. Creates or reuses the branch (no duplicate branches)
+4. `git add -A` → commit → push
+5. Checks if a PR already exists on that branch (no duplicate PRs)
+6. `gh pr create` → opens the PR
 
-```python
-if replacement_string and replacement_string in content:
-    return {"patched": False, "reason": "patch already applied"}
+---
+
+#### § System prompts
+
+Instructions Gemini reads before the loop starts. They enforce:
+- **Tool order**: `read_ci_logs` → `search_knowledge_base` → `write_analysis` (analyze); `read_analysis` → `apply_patch` → `create_pull_request` (fix)
+- **Field rules**: `error_type` must be kebab-case, never `"other"`; `patch_type` must be `search_replace` for any file fix
+- **PR format**: Problem / Root Cause / Proposed Fix / How to Verify
+
+Without the ordering constraint, Gemini might call `write_analysis` before reading the logs.
+
+---
+
+#### § Agentic loop
+
+Each iteration is one Gemini API call. `contents` grows on every turn so Gemini sees the full conversation history:
+
+```
+Turn 1:  "diagnose this failure" + system prompt
+         → Gemini calls read_ci_logs()
+         ← 206 lines → 26 error lines (89% token reduction)
+
+Turn 2:  sees error lines
+         → Gemini calls search_knowledge_base("npm ERESOLVE...")
+         ← similarity=0.82, past_fix="upgrade react-testing-library..."
+
+Turn 3:  sees logs + proven past fix
+         → Gemini calls write_analysis(error_type="npm-dependency", ...)
+         ← analysis.json saved ✅
+
+Turn 4:  no function calls → loop breaks, agent done
 ```
 
-If the fix job is re-run (e.g. after a timeout), it won't corrupt the file by applying the same patch twice.
+If Gemini returns no function calls → loop exits cleanly. If `MAX_TURNS=12` is reached without finishing → script exits with error. After analyze mode, the script verifies `analysis.json` was written — if Gemini skipped `write_analysis`, the job fails.
 
-#### How `analysis.json` travels between jobs
+---
 
-`write_analysis` saves the diagnosis to disk on the analyze runner. The workflow then uploads it as a GitHub Actions artifact and the fix job downloads it on a completely different runner:
+#### § Data flow
 
 ```
-analyze-failure runner          approve-and-fix runner
-      │                                │
-  analysis.json                        │
-      │                                │
-  upload-artifact ──── GitHub ──── download-artifact
-                      storage              │
-                                      analysis.json
-```
+ANALYZE mode
+  ci_failure.log (206 lines)
+      │ read_ci_logs() → 26 error lines
+      ▼
+  Gemini sees errors
+      │ search_knowledge_base("npm ERESOLVE") → similarity=0.82
+      ▼
+  Gemini sees logs + proven fix
+      │ write_analysis(...) → analysis.json on disk
+      ▼
+  ci.yml: upload-artifact → GitHub storage
 
-Without the artifact, the fix job would have no knowledge of what the analyze job found.
+FIX mode
+  ci.yml: download-artifact → analysis.json on disk
+      │ read_analysis() → 12 fields
+      ▼
+  Gemini reads diagnosis
+      │ apply_patch("package.json", search_replace) → file patched
+      ▼
+      │ create_pull_request() → branch + commit + push + PR
+      ▼
+  PR opened on GitHub
+```
 
 ---
 
