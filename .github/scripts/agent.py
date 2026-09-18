@@ -250,6 +250,20 @@ def read_analysis() -> dict:
     return data
 
 
+def read_file(file_path: str) -> dict:
+    """
+    Read the current content of a file in the repository.
+    Use this in fix mode when apply_patch fails — read the actual file content
+    to verify what is there before retrying with a corrected search_string.
+    """
+    if not os.path.exists(file_path):
+        return {"error": f"{file_path} not found"}
+    with open(file_path, "r", errors="replace") as f:
+        content = f.read()
+    print(f"  [read_file] {file_path} — {len(content)} chars")
+    return {"file_path": file_path, "content": content, "chars": len(content)}
+
+
 def apply_patch(affected_file: str, patch_type: str, search_string: str, replacement_string: str) -> dict:
     """
     Apply a code patch to the affected file.
@@ -410,7 +424,10 @@ SYSTEM_PROMPTS = {
         "Use your tools in this order:\n"
         "1. read_analysis — load the diagnosis from the analyze phase\n"
         "2. apply_patch — patch the affected file using the exact strings from the analysis\n"
-        "3. create_pull_request — commit the patch and open the GitHub PR\n\n"
+        "3. If apply_patch returns 'search_string not found', call read_file on the affected_file "
+        "to see its actual current content, then retry apply_patch with the correct search_string "
+        "that matches what is actually in the file. Do NOT retry with the same search_string.\n"
+        "4. create_pull_request — commit the patch and open the GitHub PR\n\n"
         "Use the pr_title and pr_description from the analysis as-is.\n"
         "For commit_message use: 'fix(ci): <error_type> fix for commit <sha>'"
     ),
@@ -438,7 +455,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 TOOL_MAP = {
     "analyze": [read_ci_logs, search_knowledge_base, write_analysis],
-    "fix":     [read_analysis, apply_patch, create_pull_request],
+    "fix":     [read_analysis, read_file, apply_patch, create_pull_request],
 }
 tools = TOOL_MAP[AGENT_MODE]
 TOOL_REGISTRY = {fn.__name__: fn for fn in tools}
