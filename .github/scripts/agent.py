@@ -42,7 +42,7 @@ CHROMA_API_KEY  = os.environ.get("CHROMA_API_KEY", "")
 CHROMA_TENANT   = os.environ.get("CHROMA_TENANT", "")
 CHROMA_DATABASE = os.environ.get("CHROMA_DATABASE", "default_database")
 CHROMA_COLLECTION = "ci_failures"
-EMBED_MODEL     = "models/text-embedding-004"
+EMBED_MODEL     = "text-embedding-004"
 
 LOG_FILE        = "ci_failure.log"
 ANALYSIS_FILE   = "analysis.json"
@@ -143,7 +143,7 @@ def search_knowledge_base(query: str) -> dict:
         model=EMBED_MODEL,
         contents=query,
     )
-    query_vector = embed_result.embeddings[0].values
+    query_vector = list(embed_result.embeddings[0].values)
 
     # Query ChromaDB Cloud
     chroma = chromadb.HttpClient(

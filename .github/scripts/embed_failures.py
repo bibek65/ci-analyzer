@@ -19,7 +19,7 @@ CHROMA_API_KEY  = os.environ.get("CHROMA_API_KEY", "")
 CHROMA_TENANT   = os.environ.get("CHROMA_TENANT", "")
 CHROMA_DATABASE = os.environ.get("CHROMA_DATABASE", "default_database")
 COLLECTION_NAME = "ci_failures"
-EMBED_MODEL     = "models/text-embedding-004"
+EMBED_MODEL     = "text-embedding-004"
 
 if not GEMINI_API_KEY:
     print("ERROR: GEMINI_API_KEY not set"); sys.exit(1)
@@ -90,7 +90,8 @@ def get_embedding(text: str) -> list:
         model=EMBED_MODEL,
         contents=text,
     )
-    return result.embeddings[0].values
+    # SDK v2: embeddings[0].values is a list of floats
+    return list(result.embeddings[0].values)
 
 # ── ChromaDB Cloud ────────────────────────────────────────────────────────────
 
