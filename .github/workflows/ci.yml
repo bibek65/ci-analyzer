@@ -63,10 +63,6 @@ jobs:
 
           echo "Log downloaded: $(wc -l < ci_failure.log) lines"
 
-      # Simultaneously applies:
-      #   Tool 1 — GitHub API  : CI logs already downloaded above
-      #   Tool 2 — RAG / KB    : keyword-scored knowledge base search in script
-      #   Tool 3 — Gemini      : root cause analysis + PR description in one call
       - name: "Step 1 — AI Agent: analyze (read_ci_logs → search_knowledge_base → write_analysis)"
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -80,7 +76,6 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python3 .github/scripts/agent.py
 
-      # Tool 4 — Slack MCP: post structured diagnosis and request human YES/NO
       - name: "Step 1b — Notify Slack (Approval Required)"
         if: success()
         env:
@@ -136,7 +131,6 @@ jobs:
       - name: Install dependencies
         run: pip install google-genai==2.20.0 chromadb==1.0.0
 
-      # Tool 5 — GitHub MCP: apply file patch + create fix PR
       - name: "Step 2 — AI Agent: fix (read_analysis → apply_patch → create_pull_request)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -150,7 +144,6 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python3 .github/scripts/agent.py
 
-      # Tool 4 — Slack MCP: confirm PR was created
       - name: "Step 2b — Notify Slack (PR Created)"
         if: success()
         env:
@@ -187,7 +180,6 @@ jobs:
           name: ci-analysis
         continue-on-error: true
 
-      # Tool 4 — Slack MCP: inform team that fix was not approved
       - name: "Notify Slack (Fix Rejected)"
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

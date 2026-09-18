@@ -4,6 +4,23 @@ A real GitHub Actions pipeline where a **Gemini AI agent** autonomously diagnose
 
 ---
 
+## Why Not MCP?
+
+MCP (Model Context Protocol) lets an AI agent call external tools — like reading GitHub issues or posting to Slack — through a standardized server interface. It's a valid architecture, but it requires running a persistent MCP server outside GitHub Actions (a webhook server, a hosted process), which adds infrastructure complexity.
+
+This project uses **Gemini's native function calling** instead:
+
+| Capability | MCP approach | This project |
+|---|---|---|
+| Read CI logs | GitHub MCP server | `gh api` CLI in the workflow step, file passed to agent |
+| Search past failures | RAG MCP server | ChromaDB Cloud queried directly from Python |
+| Post to Slack | Slack MCP server | `notify_slack.py` — plain HTTP POST to Slack Workflow webhook |
+| Create GitHub PR | GitHub MCP server | `subprocess` calls to `git` + `gh` CLI inside `agent.py` |
+
+The agent still **behaves like it's using MCP** — Gemini calls named tools, gets results back, and decides what to do next. The difference is the tools are plain Python functions running inside the GitHub Actions runner, not external MCP servers. No extra infrastructure needed.
+
+---
+
 ## End-to-End Flow
 
 ```
