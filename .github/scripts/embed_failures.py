@@ -40,7 +40,7 @@ FAILURES = [
     },
     {
         "id": "fail_005",
-        "document": "Node.js build failed: npm ERR ERESOLVE unable to resolve dependency tree. Root cause: peer dependency conflict between react version 18 and react-testing-library version 12 which requires react 17. Fix: upgrade react-testing-library to version 13 or add --legacy-peer-deps flag to npm install.",
+        "document": "Node.js build failed: npm ERR ERESOLVE unable to resolve dependency tree. Root cause: peer dependency conflict between two packages requiring incompatible versions of the same dependency. Fix: align the mismatched package version in package.json to satisfy the peer dependency requirement shown in the error output.",
         "metadata": {"category": "nodejs", "severity": "medium"}
     },
     {
