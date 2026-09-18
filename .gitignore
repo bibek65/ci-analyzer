@@ -1,3 +1,7 @@
+# CI Analyzer artifacts — never commit these
+analysis.json
+ci_failure.log
+
 # Logs
 logs
 *.log

@@ -322,8 +322,16 @@ def create_pull_request(pr_title: str, pr_description: str, commit_message: str)
         run(["git", "checkout", "-b", branch, f"origin/{TRIGGER_BRANCH}"])
         print(f"  [create_pull_request] created branch {branch}")
 
-    # Stage and commit
-    run(["git", "add", "-A"])
+    # Stage only the patched file — never commit analysis.json or CI artifacts
+    affected_file = ""
+    if os.path.exists(ANALYSIS_FILE):
+        with open(ANALYSIS_FILE) as f:
+            affected_file = json.load(f).get("affected_file", "")
+
+    if affected_file and os.path.exists(affected_file):
+        run(["git", "add", affected_file])
+    else:
+        run(["git", "add", "-A", "--", ":!analysis.json", ":!ci_failure.log"])
     diff = run(["git", "diff", "--cached", "--quiet"], check=False)
     if diff.returncode != 0:
         run(["git", "commit", "-m", f"{commit_message}\n\nRun: {RUN_ID}"])
